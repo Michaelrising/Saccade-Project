@@ -55,7 +55,7 @@ class MyStrategy(Strategy):
         self.warm_up = True
 
     def next(self, tick):
-        if tick < self.warm_up_date:
+        if tick[:4] < self.warm_up_date:
             return
         elif not self.warm_up:
             self._warm_up()
@@ -89,16 +89,17 @@ class MyStrategy(Strategy):
 
         price = 0.0
         #TODO conditionning on the market info, the price could be bid or ask or mid
-        amount = int(self._broker.cash / len(buy_stocks))
+        ava_cash = self._broker.cash
+        amount = int(ava_cash / len(buy_stocks))
+        order_type = '1' # set always market order for instant trading
         for stock in buy_stocks:
-            self.execute(stock, amount, price)
+            order = (stock, amount, price, order_type, '1')
+            self.execute(order)
 
+        amount = int(ava_cash / len(sell_stocks))
         for stock in sell_stocks:
-            self.execute(stock, amount, price)
-
-        for stock in buy_stocks:
-            amount = int(self._broker.cash / len(buy_stocks))
-            self.buy(stock, amount)
+            order = (stock, -amount, price, order_type, '2')
+            self.execute(order)
 
     def risk_manager(self):
         # Calculate the current portfolio value based on today's prices

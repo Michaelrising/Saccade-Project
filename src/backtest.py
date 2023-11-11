@@ -1,4 +1,5 @@
 import pandas as pd
+import polars as pl
 from .strategy import Strategy
 from .broker import Broker
 from tqdm import tqdm
@@ -11,7 +12,7 @@ class Backtest:
     """
 
     def __init__(self,
-                 data: pd.DataFrame,
+                 data: pl.DataFrame,
                  strategy: Strategy,
                  broker: Broker):
         """
@@ -19,7 +20,7 @@ class Backtest:
         strategy object, initial capital, commission rate, etc.
         The initialization process includes checking input types, filling data null values, etc.
         Parameters:
-        :param data:           pd.DataFrame        Historical data in pandas DataFrame format
+        :param data:           pl.DataFrame        Historical data in pandas DataFrame format
         :param broker:         type(Broker)        Broker type responsible for executing buy and sell operations
                                                    as well as maintaining account status.
         :param strategy:       type(Strategy)      Strategy Type
@@ -29,16 +30,19 @@ class Backtest:
         """
 
         # Sort the market data by time if it is not already sorted.
-        if not data.index.is_monotonic_increasing:
-            data = data.sort_index()
+        # if not data.index.is_monotonic_increasing:
+        #     data = data.sort_index()
         # Initialize exchange and strategy objects using data.
-        self._data = data[['Date', 'Time', 'SecurityID', 'Close']]
+        self._data = data[['Date', 'Minutes', 'Time', 'Stock', 'trade_mask', 'lift_mask',
+                           'hit_mask', 'close', 'last_bid', 'last_ask', 'last_mid']]
+        if not self._data['Time'].is_sorted():
+            self._data = self._data.sort('Time')
 
         self._broker = broker
         self._strategy = strategy
         self._results = None
 
-    def run(self):
+    def run(self, groupby_date=True):
         """
         Run backtesting, iterate through historical data, execute simulated trades, and return backtesting results.
         Run the backtest. Returns `pd.Series` with results and statistics.
@@ -50,13 +54,21 @@ class Backtest:
         strategy.init()
         # Set the start and end positions for backtesting
         # Backtesting main loop, update market status, and execute strategy
-
-        for tick in tqdm(self._data['Time'].unique().tolist()):
-            # tick_data = self._data.loc[self._data['date'] == tick]
-            broker.next(tick)
-            strategy.next(tick)
-            broker.write_ratio(tick)
-            # cross night TODO close all the positions
+        if groupby_date:
+            for day, data in tqdm(self._data.groupby('Date', maintain_order=True)):
+                for tick in data['Time'].unique().to_list():
+                    # tick_data = self._data.loc[self._data['date'] == tick]
+                    broker.next(tick)
+                    strategy.next(tick)
+                    broker.write_ratio(tick)
+                # TODO close all the positions
+                broker.close_all_positions()
+        else:
+            for tick in tqdm(self._data['Time'].unique().to_list()):
+                # tick_data = self._data.loc[self._data['date'] == tick]
+                broker.next(tick)
+                strategy.next(tick)
+                broker.write_ratio(tick)
 
         # After completing the strategy execution, calculate the results and return them.
         res = broker.get_result()

@@ -3,17 +3,18 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
+import polars as pl
 
 class Broker:
     def __init__(self, data, cash, commission):
         assert_msg(0 < cash, "Enter the initial cash quantity.：{}".format(cash))
         assert_msg(0 <= commission <= 0.05, "Please input the commission fee rate.：{}".format(commission))
         self._initial_cash = cash
-        self._data = data
+        self.market_data = data
         self._stocks = data['Stock'].unique()
         self._commission = commission
-        self._position = {i: [0, 0.0]for i in self._stocks}
-        self.tick_data = {i: 0.0 for i in self._stocks}
+        self._position = {}
+        self.tick_data = {}
         self._cash = cash
         self._i = 0
         self._last_i = None
@@ -59,19 +60,58 @@ class Broker:
         """
         :return: Return current market price
         """
-        new_tick_data = self._data.loc[self._data['Date'] == self._i][['Stock', 'close']].to_dict(orient='records')
-        for i in new_tick_data:
-            self.tick_data[i['Stock']] = i['close']
+        new_tick_data = self.market_data.filter(pl.col('Time') == self._i).to_dict(orient='records')
+        for tick_i in new_tick_data:
+            self.tick_data[tick_i['Stock']] = tick_i
         return self.tick_data
 
-    def execute(self, stock, amount, price, order_type='limit'):
+    def assert_tradable(self, order):
+        stock, amount, price, order_type, order_side = order
+        current_market_state = self.current_price.get(stock)
+        if current_market_state is not None:
+            if current_market_state['trade_mask'] == 0:
+                return None
+            elif order_side == '1':
+                if current_market_state['hit_mask'] == 0:
+                    trade_price = current_market_state['last_ask']
+                elif current_market_state['hit_mask'] == 1:
+                    trade_price = current_market_state['last_mid']
+                else:
+                    trade_price = current_market_state['close']
+            elif order_side == '2':
+                if current_market_state['lift_mask'] == 0:
+                    trade_price = current_market_state['last_bid']
+                elif current_market_state['lift_mask'] == 1:
+                    trade_price = current_market_state['last_mid']
+                else:
+                    trade_price = current_market_state['close']
+            else:
+                pass
+            new_order = (stock, amount, trade_price, order_type, order_side)
+            return new_order
+        else:
+            return None
+
+    def execute(self, order):
         """
         Buy all at market price using the remaining funds in the current account.
         """
-        assert_msg(stock in self._stocks, "Please enter the stock code.：{}".format(stock))
+        stock, amount, price, order_type, order_side = order
         quantity = int(amount / price)
+        order = self.assert_tradable(order)
+        if order is None:
+            self.transaction_history.append(
+                {'Stock': stock, 'Quantity': quantity, 'Price': price,
+                 'OrderType': order_type, 'OrderSide': order_side, 'Status': 0})
+            return False
+        else:
+            stock, amount, price, order_type, order_side = order
+            quantity = int(amount / price)
+
+        assert_msg(stock in self._stocks, "Please enter the stock code.：{}".format(stock))
+
         if quantity < 1:
-            return
+            return False
         self._cash -= float(quantity * price * (1 + self._commission))
 
         # Update position
@@ -82,16 +122,34 @@ class Broker:
             # Adjust average price if not closing the position
             if new_quantity != 0:
                 new_average_price = (existing_quantity * average_price + price) / new_quantity
+                self._position[stock] = (new_quantity, new_average_price)
             else:
-                new_average_price = 0
+                del self._position[stock]
 
-            self._position[stock] = (new_quantity, new_average_price)
         else:
             self._position[stock] = (quantity, price)
         # Record the transaction
         self.transaction_history.append(
-            {'Stock': stock, 'Quantity': quantity, 'Price': price, 'OrderType': order_type})
+            {'Stock': stock, 'Quantity': quantity, 'Price': price,
+             'OrderType': order_type, 'OrderSide': order_side, 'Status': 1})
         return True
+
+    def close_all_positions(self):
+        # use the close price as the closing all positions price
+        # and assume it can always be traded
+        for stock, (quantity, average_price) in self._position.items():
+            if quantity < 0:
+                price = self.current_price[stock]['last_ask']
+                order_side = '1'
+            else:
+                price = self.current_price[stock]['last_bid']
+                order_side = '2'
+
+            order_type = '1'
+            self._cash += quantity * price * (1-self._commission)
+            self.transaction_history.append({'Stock': stock, 'Quantity': quantity, 'Price': price,
+                                             'OrderType': order_type, 'OrderSide': order_side, 'Status': 1})
+            del self._position[stock]
 
     def next(self, tick):
         self._i = tick
