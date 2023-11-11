@@ -27,13 +27,12 @@ class Backtest:
         :param commission:     float               Transaction fee rate for each transaction. For example, if the fee is
                                                    .2%, then it should be entered as 0.002 here.
         """
-        data = data.copy(False)
 
         # Sort the market data by time if it is not already sorted.
         if not data.index.is_monotonic_increasing:
             data = data.sort_index()
         # Initialize exchange and strategy objects using data.
-        self._data = data[['date', 'id', 'px_raw']]
+        self._data = data[['Date', 'Time', 'SecurityID', 'Close']]
 
         self._broker = broker
         self._strategy = strategy
@@ -52,12 +51,13 @@ class Backtest:
         # Set the start and end positions for backtesting
         # Backtesting main loop, update market status, and execute strategy
 
-        for tick in tqdm(self._data['date'].unique().tolist()):
+        for tick in tqdm(self._data['Time'].unique().tolist()):
             # tick_data = self._data.loc[self._data['date'] == tick]
             broker.next(tick)
             strategy.next(tick)
             broker.write_ratio(tick)
-            # self.write_ratio()
+            # cross night TODO close all the positions
+
         # After completing the strategy execution, calculate the results and return them.
         res = broker.get_result()
         broker.plot_ratio()

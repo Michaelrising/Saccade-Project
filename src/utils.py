@@ -4,6 +4,32 @@ import os
 import tqdm
 
 
+def test_train_split(df: pl.DataFrame, label, r: float = 0.8, skip: int = 1, folds=5):
+    days = df['Date'].unique().sort().to_list()
+    fold_size = len(days) // folds
+    for i in range(folds):
+        this_fold = days[i * fold_size: (i + 1) * fold_size]
+        train_ = this_fold[:int(len(this_fold)*r)-skip]
+        test_ = this_fold[int(len(this_fold)*r):]
+        train_data = df.filter(pl.col('Date').is_in(train_))
+        test_data = df.filter(pl.col('Date').is_in(test_))
+
+        drops = ['Stock', 'Date', 'Minutes', 'log_open', 'log_close',  'trade_mask',
+                 'lift_mask', 'hit_mask', 'log_vwap', 'log_mid', 'log_twap_mid']
+
+        train_X = train_data.drop(drops).to_numpy()
+        train_y = train_data[label].to_numpy()
+
+        test_X = test_data.drop(drops).to_numpy()
+        test_y = test_data[label].to_numpy()
+
+        train_info = train_data[['Stock', 'Date', 'Minutes', label]]
+        test_info = test_data[['Stock', 'Date', 'Minutes', label]]
+
+        return train_X, train_y, test_X, test_y, train_info, test_info
+
+
+
 def assert_msg(condition, msg):
     if not condition:
         raise Exception(msg)
@@ -83,7 +109,9 @@ class preprocessor():
 
     def _fillnull(self, feature_lists, method):
         if method == 'forward':
-            self.feature_data = self.feature_data.with_columns(pl.col(feature_lists).forward_fill().over('Date')).drop_nulls()
+
+            self.feature_data = self.feature_data.fill_nan(pl.lit(None)).with_columns(pl.col(feature_lists).forward_fill().over('Date')).drop_nulls()
+
         elif method == '0':
             self.feature_data = self.feature_data.with_columns(pl.all().fill_null(0))
         else:
@@ -118,7 +146,7 @@ class preprocessor():
             lower_limit = quantiler_[0] - (iqr * n)
         elif method == 'mad':
             median = data.median()
-            mad = data.select((pl.all() .sub(pl.all().median())).abs().median( ))
+            mad = data.select((pl.all() .sub(pl.all().median())).abs().median())
             upper_limit = median + n * mad
             lower_limit = median - n * mad
         else:

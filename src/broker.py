@@ -10,7 +10,7 @@ class Broker:
         assert_msg(0 <= commission <= 0.05, "Please input the commission fee rate.：{}".format(commission))
         self._initial_cash = cash
         self._data = data
-        self._stocks = data['id'].unique()
+        self._stocks = data['Stock'].unique()
         self._commission = commission
         self._position = {i: [0, 0.0]for i in self._stocks}
         self.tick_data = {i: 0.0 for i in self._stocks}
@@ -19,6 +19,7 @@ class Broker:
         self._last_i = None
         self.day_value = []
         self.maxdown_point = []
+        self.transaction_history = []
 
     @property
     def cash(self):
@@ -58,32 +59,39 @@ class Broker:
         """
         :return: Return current market price
         """
-        new_tick_data = self._data.loc[self._data['date'] == self._i][['id', 'px_raw']].to_dict(orient='records')
+        new_tick_data = self._data.loc[self._data['Date'] == self._i][['Stock', 'close']].to_dict(orient='records')
         for i in new_tick_data:
-            self.tick_data[i['id']] = i['px_raw']
+            self.tick_data[i['Stock']] = i['close']
         return self.tick_data
 
-    def buy(self, stock, amount):
+    def execute(self, stock, amount, price, order_type='limit'):
         """
         Buy all at market price using the remaining funds in the current account.
         """
         assert_msg(stock in self._stocks, "Please enter the stock code.：{}".format(stock))
-        num = int(amount / self.current_price[stock])
-        if num < 1:
+        quantity = int(amount / price)
+        if quantity < 1:
             return
-        self._cash -= float(num * self.current_price[stock] * (1 + self._commission))
+        self._cash -= float(quantity * price * (1 + self._commission))
 
-        self._position[stock][0] += num
-        if self._position[stock][1] == 0.0:
-            self._position[stock][1] = self.current_price[stock]
+        # Update position
+        if stock in self._position:
+            existing_quantity, average_price = self._position[stock]
+            new_quantity = existing_quantity + quantity
 
-    def sell(self, stock):
-        """
-        Sell the remaining positions in the current account
-        """
-        assert_msg(stock in self._stocks, "Please enter the stock code.：{}".format(stock))
-        self._cash += float(self._position[stock][0] * self.current_price[stock]) #* (1 - self._commission))
-        self._position[stock] = [0, 0.0]
+            # Adjust average price if not closing the position
+            if new_quantity != 0:
+                new_average_price = (existing_quantity * average_price + price) / new_quantity
+            else:
+                new_average_price = 0
+
+            self._position[stock] = (new_quantity, new_average_price)
+        else:
+            self._position[stock] = (quantity, price)
+        # Record the transaction
+        self.transaction_history.append(
+            {'Stock': stock, 'Quantity': quantity, 'Price': price, 'OrderType': order_type})
+        return True
 
     def next(self, tick):
         self._i = tick
@@ -91,7 +99,19 @@ class Broker:
     # record daily value
     def write_ratio(self, tick):
         the_value = self.market_value
-        self.day_value.append({'date': tick, 'value': the_value})
+        self.day_value.append({'Date': tick, 'Value': the_value})
+
+    def calculate_pnl(self):
+        """
+        Calculate the unrealized P&L of the portfolio.
+        """
+        total_pnl = 0
+        for stock, (quantity, average_price) in self._position.items():
+            # Assume we have a function to get the current market price
+            current_market_price = self.tick_data[stock]
+            total_pnl += (current_market_price - average_price) * quantity
+
+        return total_pnl
 
     def get_absolute_return(self):
         _cash = self.market_value
@@ -106,7 +126,7 @@ class Broker:
 
     # sharpe ratio
     def get_sharpe_ratio(self):
-        _cash = pd.DataFrame(self.day_value)['value']
+        _cash = pd.DataFrame(self.day_value)['Value']
         ratio = ((_cash - self._initial_cash) / self._initial_cash).dropna()
         return_value = (self.get_annualized_return() - 0.02) / ratio.std() * (252 ** 0.5)
         return return_value
@@ -115,7 +135,7 @@ class Broker:
 
     def get_maxdown(self):
         _df = pd.DataFrame(self.day_value)
-        return_list = _df['value'].dropna()
+        return_list = _df['Value'].dropna()
         i = np.argmax((np.maximum.accumulate(return_list) - return_list) / np.maximum.accumulate(return_list)) + 1
         if i == 0:
             return 0
@@ -139,17 +159,17 @@ class Broker:
         sns.set()
 
         _day_price = pd.DataFrame(self.day_value).dropna()
-        _day_price['trade_ratio'] = (_day_price['value'] - self._initial_cash) / self._initial_cash
+        _day_price['trade_ratio'] = (_day_price['Value'] - self._initial_cash) / self._initial_cash
 
         plt.figure(figsize=(w, h))
         # return ratio
-        plt.plot(_day_price['date'], _day_price['trade_ratio'], linewidth='2', color='#1E90FF')
+        plt.plot(_day_price['Date'], _day_price['trade_ratio'], linewidth='2', color='#1E90FF')
         # set x ticks to be readable
-        plt.xticks(_day_price['date'][::int(len(_day_price) / 10)], rotation=45)
+        plt.xticks(_day_price['Date'][::int(len(_day_price) / 10)], rotation=45)
 
         # max drawdown points
-        x_list = [date['date'] for date in self.maxdown_point]
-        y_list = [(date['value'] - self._initial_cash) / self._initial_cash for date in self.maxdown_point]
+        x_list = [date['Date'] for date in self.maxdown_point]
+        y_list = [(date['Value'] - self._initial_cash) / self._initial_cash for date in self.maxdown_point]
         plt.scatter(x_list, y_list, c='g', linewidths=7, marker='o')
 
         # benchmark

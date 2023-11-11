@@ -42,9 +42,9 @@ class Strategy(metaclass=abc.ABCMeta):
         """
         pass
 
-    def buy(self, stock, amount):
-        self._broker.buy(stock, amount)
+    def execute(self, stock, amount, price):
+        self._broker.execute(stock, amount, price)
 
-    def sell(self, stock):
-        self._broker.sell(stock)
+    # def sell(self, stock):
+    #     self._broker.sell(stock)
 

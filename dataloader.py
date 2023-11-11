@@ -1,6 +1,4 @@
 import polars as pl
-import polars.selectors as cs
-import numpy as np
 import os
 import tqdm
 from src.utils import preprocessor
@@ -21,7 +19,7 @@ class DataLoader():
         return pl.read_ipc(os.path.join(self.data_path, 'raw_data.arrow'))
 
     def get_features(self):
-        return pl.read_ipc(os.path.join(self.data_path, 'features.arrow'))
+        return pl.read_ipc(os.path.join(self.data_path, 'factors.arrow'))
 
     def get_derivatives(self):
         return pl.read_ipc(os.path.join(self.data_path, 'derivatives.arrow'))
@@ -32,36 +30,36 @@ class DataLoader():
         self.datamap['raw_data'] = self.load_raw_data()
         self.datamap['features'] = self.get_features()
         self.datamap['derivatives'] = self.get_derivatives()
-        self.stocks = self.datamap['raw_data'].select('Stock').unique().to_list()
+        self.stocks = sorted(self.datamap['raw_data']['Stock'].unique().to_list())
 
         return self.datamap
 
     def load_dataset_to_map(self, horizon: int = 5):
 
-        for stock in self.stocks:
+        for stock in tqdm.tqdm(self.stocks):
 
             print(f"Loading {stock}...")
-            in_raw_data = self.datamap['raw_data'].filter(pl.col('Stock') == stock)
+            # in_raw_data = self.datamap['raw_data'].filter(pl.col('Stock') == stock)
 
             in_derivatives = self.datamap['derivatives'].filter(pl.col('Stock') == stock)
-            in_data = in_raw_data.join(in_derivatives, on=['Date', 'Minutes', 'Stock'], how='inner')
 
             in_features = self.datamap['features'].filter(pl.col('Stock') == stock)
-
-            # preprocess data
-            processor = self.processor(in_features)
-            feature_lists = in_features.drop('Date', 'Minutes', 'Stock').columns
-            in_features = processor.winsorize(feature_lists=feature_lists)
-
-            assert len(in_data) == len(in_raw_data) == len(in_features) == len(in_derivatives), "Data length mismatch"
-
             # join all the data
-            data = in_data.join(in_features, on=['Date', 'Minutes', 'Stock'], how='inner')
+            data = in_derivatives.join(in_features, on=set(in_derivatives.columns).intersection(set(in_features.columns)), how='inner')
+            # preprocess data
 
-            # get the target
-            target = self.get_target(in_data[['Date', 'Minutes', 'open', 'close', 'vwap', 'last_mid']],
+            # # get the target
+            target = self.get_target(data[['Date', 'Minutes', 'open', 'close', 'vwap', 'last_mid', 'twap_mid']],
                                      groupby_date=True, horizon=horizon)
-            data = data.join(target, on=['Date', 'Minutes'], how='inner')
+
+            data = data.join(target, on=set(data.columns).intersection(set(target.columns)), how='inner')
+
+            feature_lists = data.drop('Date', 'Minutes', 'Stock').columns
+
+            processor = self.processor(data)
+            processor.fillnull(feature_lists=feature_lists)
+            data = processor.winsorize(feature_lists=feature_lists)
+
             self.market_datamap[stock] = data
 
         return self.market_datamap
@@ -79,12 +77,15 @@ class DataLoader():
                                                   (pl.col('twap_mid').log().shift(-horizon) - pl.col('twap_mid').log().shift(-1)).over('Date').alias('log_twap_mid')])
         else:
             pass
-        return price_data
+        return price_data.drop(['open', 'close', 'vwap', 'last_mid', 'twap_mid'])
 
-    def save_dataset(self, path='./data/processed_data'):
+    def save_dataset(self, path='./data/Stocks'):
         os.makedirs(path, exist_ok=True)
         for stock in self.stocks:
             self.market_datamap[stock].write_ipc(os.path.join(path, f"{stock}.arrow"))
         # return self.market_datamap
 
 
+loader = DataLoader()
+loader.load_dataset_to_map()
+loader.save_dataset()

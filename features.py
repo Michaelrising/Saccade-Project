@@ -5,6 +5,9 @@ from src.utils import get_data, preprocessor
 from talib import abstract
 import tqdm
 
+# fields = ['BBANDS', 'MIDPOINT', 'SAR', 'T3', 'TRIMA', 'AROONOSC', 'CMO', 'MFI', 'MOM', 'STOCH', 'RSI', 'WILLR', 'ULTOSC',
+#           'ADOSC', 'AD', 'OBV', 'TRANGE', 'NATR', 'HT_DCPERIOD', 'HT_DCPHASE', 'HT_PHASOR', 'HT_SINE', 'HT_TRENDMODE',
+#           'CDL3BLACKCROWS', '']
 
 class PriceVolumeIndicators:
     def __init__(self, data: pl.DataFrame, fields=None, derivatives=None):
@@ -37,7 +40,7 @@ class PriceVolumeIndicators:
             # cal the factors
             for factor in self.fields:
                 if factor.upper() in self.tab_factors:
-                    if factor.upper() == 'MAVP':
+                    if factor.upper() in ['MAVP', 'ASIN', 'ACOS', 'EXP', 'COSH', 'SINH']:
                         continue
                     try:
                         func = getattr(abstract, factor.upper())
@@ -49,6 +52,9 @@ class PriceVolumeIndicators:
                             # Handle 2D list
                             for i, sublist in enumerate(outputs):
                                 series_name = f"{factor}_{i}"
+                                if np.isnan(sublist).sum() > 0.3 * len(sublist):
+                                    print(f"Error in {factor} all NAN")
+                                    continue
                                 this_stock = this_stock.insert_at_idx(this_stock.shape[1],
                                                                       pl.Series(series_name, sublist))
                         else:
@@ -71,11 +77,12 @@ class PriceVolumeIndicators:
         for derivative in self.derivatives:
             func = getattr(self, 'add_' + derivative)
             func()
+
         return self.data
 
     def add_spread(self):
         self.data = self.data.with_columns((pl.col('last_ask') - pl.col('last_bid')).alias('spread'),
-                                           (pl.col('spread')/2).alias('half_spread'))
+                                           ((pl.col('last_ask') - pl.col('last_bid'))/2).alias('half_spread'))
 
     def add_imbalance(self):
         self.data = self.data.with_columns(
@@ -101,11 +108,16 @@ class PriceVolumeIndicators:
         return self.factors
 
 
-# data = get_data()
-# data = data.write_ipc('all_data.arrow')
-data = pl.read_ipc('data/raw_data.arrow')
+
+try:
+    data = pl.read_ipc('data/raw_data.arrow')
+except FileNotFoundError:
+    data = get_data()
+    data.write_ipc('data/raw_data.arrow')
 indicators = PriceVolumeIndicators(data)
 factors = indicators.get_technical_factors()
-derivatives = indicators.get_derivatives()
 factors.write_ipc('data/factors.arrow')
+
+derivatives = indicators.get_derivatives()
+
 derivatives.write_ipc('data/derivatives.arrow')
