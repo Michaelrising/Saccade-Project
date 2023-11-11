@@ -1,3 +1,6 @@
 data/
 sample_data/
 venv/
+.DS_Store
+.idea/
+__pycache__/
