@@ -41,9 +41,9 @@ class MyStrategy(Strategy):
         idx = self._broker._calenders.index(date)
         self.days_focus = self._broker._calenders[min(0, idx-3):idx+1]
         self.train_data = data.filter(pl.col('Date').is_in(self.days_focus)).select(
-            ['Time', self.label] + self.features).collect().to_numpy()
+            ['Time', self.label] + self.features)#.collect().to_numpy()
 
-        self.market = data.select(['Time', 'Stock']).collect().to_numpy()
+        self.market = data.select(['Time', 'Stock'])#.collect().to_numpy()
 
 
     def _warm_up(self, length=20):
@@ -53,9 +53,9 @@ class MyStrategy(Strategy):
         :return:
         """
         # warmup_data = self.data.filter(pl.col('Date') < self.date)
-        warmup_data = self.train_data[self.train_data[:, 0] < self.date + ' 09:30:00']
-        warmup_x = warmup_data[:, 2:].astype(np.float32)
-        warmup_y = warmup_data[:, 1].reshape(-1).astype(np.float32)
+        warmup_data = self.train_data.filter(pl.col('Time') < self.date + ' 09:30:00')#[self.train_data[:, 0] < self.date + ' 09:30:00']
+        warmup_x = warmup_data.select(self.features).collect().to_numpy()#[:, 2:].astype(np.float32)
+        warmup_y = warmup_data.select(self.label).collect().to_numpy().reshape(-1) #[:, 1].reshape(-1).astype(np.float32)
 
         self.mean_x = warmup_x.mean(axis=0)
         self.std_x = warmup_x.std(axis=0) + 10e-6
@@ -65,7 +65,7 @@ class MyStrategy(Strategy):
         self.train_y = warmup_y
         self.warm_up = True
 
-    @nb.jit(parallel=True)
+    # @nb.jit(parallel=True)
     def next(self, tick):
 
         if tick[:4] < self.date:
@@ -73,23 +73,23 @@ class MyStrategy(Strategy):
         elif not self.warm_up:
             self._warm_up()
         else:
-            # train_data = self.data.filter((pl.col('Time') < tick))
-            self.train_x = np.concatenate((self.train_x, self.tick_x), axis=0)
+            train_data = self.train_data.filter((pl.col('Time') < tick))
+            self.train_x = train_data.select(self.features).collect().to_numpy()#np.concatenate((self.train_x, self.tick_x), axis=0)
             self.mean_x = self.train_x.mean(axis=0)
             self.std_x = self.train_x.std(axis=0) + 10e-6
             train_x = (self.train_x - self.mean_x) / self.std_x
 
-            self.train_y = np.concatenate((self.train_y, self.tick_y), axis=0)
+            self.train_y = train_data.select(self.label).collect().to_numpy().reshape(-1) #np.concatenate((self.train_y, self.tick_y), axis=0)
 
             self.model.fit(train_x, self.train_y)
 
-        tick_data = self.market[self.market[:, 0] == tick]
+        tick_data = self.market.filter(pl.col('Time') == tick).collect()#[self.market[:, 0] == tick]
         if not len(tick_data):
             return
         # if self.risk_manage and self.risk_manager():
         #     return
-        self.tick_x = self.train_data[self.train_data[:, 0] == tick][:, 2:].astype(np.float32)
-        self.tick_y = self.train_data[self.train_data[:, 0] == tick][:, 1].reshape(-1).astype(np.float32)
+        self.tick_x = self.train_data.filter(pl.col('Time') == tick).select(self.features).collect().to_numpy() #[self.train_data[:, 0] == tick][:, 2:].astype(np.float32)
+        # self.tick_y = self.train_data.filter(pl.col('Time') == tick).select(self.label).collect().to_numpy().reshape(-1) #[self.train_data[:, 0] == tick][:, 1].reshape(-1).astype(np.float32)
         tick_x = (self.tick_x - self.mean_x) / self.std_x
 
         signal = self.model.predict(tick_x)
@@ -99,10 +99,11 @@ class MyStrategy(Strategy):
         signal = signal.qcut(quantiles=5, labels=[str(i) for i in range(1, 6)])
         # buy the top 20% stocks
         buy_list = signal == '5'
-        buy_stocks = set(tick_data[buy_list][:, 1])
+        # buy_stocks = tick_data.filter
+        buy_stocks = set(tick_data.filter(buy_list)['Stock'].to_list())
         # sell the bottom 20% stocks
         sell_list = signal == '1'
-        sell_stocks = set(tick_data[sell_list][:, 1])
+        sell_stocks = set(tick_data.filter(sell_list)['Stock'].to_list())
 
         # sell first and then buy
         ava_cash = self._broker.cash

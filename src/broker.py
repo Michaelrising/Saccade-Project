@@ -23,6 +23,7 @@ class Broker:
         self.tbt_value = []
         self.maxdown_point = []
         self.transaction_history = []
+        self.all_time_positions = {}
 
     @property
     def cash(self):
@@ -98,7 +99,7 @@ class Broker:
         else:
             return None
 
-    @nb.jit(parallel=True)
+    # @nb.jit(parallel=True)
     def execute(self, stock, amount, price, order_type, order_side):
         """
         Buy all at market price using the remaining funds in the current account.
@@ -169,11 +170,13 @@ class Broker:
     def next(self, tick):
         self._i = tick
         self.tick_data = self.current_price
+        self.all_time_positions[tick] = self._position.copy()
 
     # record daily value
     def write_ratio(self, tick):
         the_value = self.calculate_pnl()
         self.tbt_value.append({'Time': tick, 'Value': the_value})
+
 
     def calculate_pnl(self):
         """
@@ -223,6 +226,7 @@ class Broker:
 
     def get_result(self):
         _dic = {'tbt_value': [[i['Time'], i['Value']/self._initial_cash] for i in self.tbt_value],
+                'position': self.all_time_positions,
                 'transaction_history': self.transaction_history,
                 'return': round(self.get_absolute_return(), 4)}
         self.result = _dic

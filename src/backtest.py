@@ -8,6 +8,7 @@ from .broker import Broker
 from tqdm import tqdm
 import multiprocessing as mp
 from multiprocessing import get_context
+import pytomlpp as toml
 
 
 class Backtest:
@@ -18,7 +19,6 @@ class Backtest:
     """
 
     def __init__(self,
-
                  data: np.array,
                  strategy: Strategy,
                  broker: Broker):
@@ -54,18 +54,24 @@ class Backtest:
         """
         # Set the start and end positions for back testing
         # Back testing main loop, update market status, and execute strategy
-        num_workers = 20
+        num_workers = 15
         # self.run_one_day((self._calenders[3], self._broker, self._strategy))
+        # exit()
 
         with get_context('spawn').Pool(num_workers) as pool:
-
-            results = list(tqdm(pool.imap(self.run_one_day, [(d, self._broker, self._strategy) for d in self._calenders[3:]])))
+        #
+            results = list(tqdm(pool.imap(self.run_one_day, [(d, self._broker, self._strategy) for d in self._calenders[-20:]])))
+        #
+        # results = []
+        # for day in tqdm(self._calenders[-20:]):
+        #     results.append(self.run_one_day((day, self._broker, self._strategy)))
 
         self.agg_res(results)
         # return results
 
     def run_one_day(self, args):
         day, broker, strategy = args
+        # print(day)
         # Strategy Initialization
         strategy.init(day)
 
@@ -74,37 +80,73 @@ class Backtest:
         ticks = np.unique(data[:, 1].reshape(-1))
         ticks.sort()
         for tick in tqdm(ticks):
-
             broker.next(tick)
             strategy.next(tick)
             broker.write_ratio(tick)
 
         broker.close_all_positions()
 
-        return broker.get_result()
+        result = broker.get_result()
+
+        tbt_values, positions, transaction_his, returns = result.values()
+
+        tbt_values = pl.from_records(tbt_values, orient='row', schema={'Time': str, 'tbt_value': float})
+        transaction_history = pl.from_records(transaction_his, orient='row',
+                                              schema={'Time': pl.Utf8, 'Stock': pl.Utf8, 'Price': pl.Float32, 'Quantity': pl.Int32, # signed int
+                                                      'OrderType': pl.Utf8, 'OrderSide': pl.Utf8, 'Status': pl.Int32})
+        returns = pl.from_dict({'Date': day, 'DailyReturn': returns})
+        returns = returns.with_columns((pl.col('DailyReturn') + pl.lit(1)).cumprod().alias('CumReturn'))
+        os.makedirs(f'./results/{day}', exist_ok=True)
+        transaction_history.write_ipc(f'./results/{day}/transaction_history.arrow')
+        tbt_values.write_ipc(f'./results/{day}/tbt_values.arrow')
+        returns.write_ipc(f'./results/{day}/returns.arrow')
+        records = []
+        for key, value in positions.items():
+            if len(value):
+                for stock, (quantity, average_price) in value.items():
+                    records.append({'Time': key, 'Stock': stock, 'Quantity': quantity, 'AveragePrice': average_price})
+        positions = pl.from_records(records, orient='row', schema={'Time': str, 'Stock': pl.Utf8,
+                                                                   'Quantity': pl.Int32, 'AveragePrice': pl.Float32})
+
+        positions.write_ipc(f'./results/{day}/positions.arrow')
+
+        return result
 
     def agg_res(self, results, save=True):
         tbt_values = []
         transaction_history = []
         returns = []
+        positions = []
         for res in results:
-            tbt_value, transaction_his, _return = res.values()
-            tbt_values.append(tbt_value)
+            tbt_value, position, transaction_his, _return = res.values()
+            tbt_values += tbt_value
             transaction_history += transaction_his
             returns.append(_return)
+            records = []
+            for key, value in positions.items():
+                if len(value):
+                    for stock, (quantity, average_price) in value.items():
+                        records.append({'Time': key, 'Stock': stock, 'Quantity': quantity, 'AveragePrice': average_price})
+            positions += records
+
         tbt_values = pl.from_records(tbt_values, orient='row', schema={'Time': str, 'tbt_value': float})
 
         transaction_history = pl.from_records(transaction_history, orient='row',
-                                              schema={'Time': str, 'Stock': str, 'Price': float, 'Quantity': int,
-                                                      'OrderType': str, 'OrderSide': str, 'Status': int})
-        returns = pl.from_dict({'Date': self._calenders[3:], 'DailyReturn': returns})
-        returns = returns.with_columns(pl.col('DailyReturn').cumprod().alias('CumReturn'))
+                                              schema={'Time': pl.Utf8, 'Stock': pl.Utf8, 'Price': pl.Float32,
+                                                      'Quantity': pl.Int32,
+                                                      'OrderType': pl.Utf8, 'OrderSide': pl.Utf8, 'Status': pl.Int32})
+        returns = pl.from_dict({'Date': self._calenders[-20:], 'DailyReturn': returns})
+        returns = returns.with_columns((pl.col('DailyReturn') + pl.lit(1)).cumprod().alias('CumReturn'))
+        positions = pl.from_records(positions, orient='row', schema={'Time': str, 'Stock': pl.Utf8,
+                                                                   'Quantity': pl.Int32, 'AveragePrice': pl.Float32})
+
         if save:
             os.makedirs('./results', exist_ok=True)
             transaction_history.write_ipc('./results/transaction_history.arrow')
             tbt_values.write_ipc('./results/tbt_values.arrow')
             returns.write_ipc('./results/returns.arrow')
-        return tbt_values, transaction_history, returns
+            positions.write_ipc('./results/positions.arrow')
+        # return tbt_values, transaction_history, returns
 
 
 
