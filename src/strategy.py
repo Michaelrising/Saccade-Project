@@ -1,5 +1,6 @@
 import abc
-
+import numba as nb
+from numba import int32, float32
 
 class Strategy(metaclass=abc.ABCMeta):
     """
@@ -43,6 +44,6 @@ class Strategy(metaclass=abc.ABCMeta):
         pass
 
     def execute(self, order):
-        self._broker.execute(order)
+        self._broker.execute(*order)
 
 

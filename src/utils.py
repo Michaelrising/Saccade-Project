@@ -63,64 +63,6 @@ def assert_msg(condition, msg):
     if not condition:
         raise Exception(msg)
 
-def get_data(path='sample_data'):
-    all_files = os.listdir(path)
-
-    all_data = []
-    all_trading_days = [file.split('_')[-1].split('.')[0] for file in all_files if file.endswith('.csv')]
-    # get the unique trading days
-    all_trading_days = np.unique(all_trading_days)
-
-    columns = ['Date', 'Minutes', 'Stock', 'open', 'high', 'low', 'close',
-               'volume', 'num_trade', 'last_bid', 'last_ask', 'bid_twap',
-               'num_lift', 'lift_vwap', 'lift_volume', 'num_hit', 'vwap',
-               'ask_twap', 'hit_vwap', 'hit_volume']
-
-    for day in tqdm.tqdm(all_trading_days):
-        # get all files for that day
-        files = [file for file in all_files if file.endswith('.csv') and file.split('_')[-1].split('.')[0] == day]
-        # read all files
-        dfs = pl.DataFrame()
-
-        for file in files:
-            fields = file.split('_')
-            item = '_'.join(fields[:-1])
-            schema = {'Minutes': str}
-            for i in range(1, 101):
-                schema['Stock' + str(i)] = float
-            df = pl.read_csv(os.path.join(path, file), dtypes=schema)
-            df = df.melt(id_vars='Minutes', variable_name='Stock', value_name=item).sort('Minutes')
-
-            if len(dfs) == 0:
-                dfs = df
-            else:
-                dfs = dfs.join(df, on=['Minutes', 'Stock'], how='inner')
-        dfs = dfs.insert_at_idx(0, pl.Series('Date', [day] * len(dfs)))
-        all_data.append(dfs.select(columns))
-
-    all_data = pl.concat(all_data)
-
-    # we add three masks here denoting that the conditions we could buy or sell
-    # 0: no trade
-    # 1: 1-3 trades
-    # 2: 4+ trades
-    all_data = all_data.with_columns(pl.when(pl.col('num_trade') == 0).
-                                         then(pl.lit(0)).
-                                         when(pl.col('num_trade').is_between(1, 3)).
-                                         then(pl.lit(1)).
-                                         otherwise(pl.lit(2)).alias('trade_mask'))
-    all_data = all_data.with_columns(pl.when(pl.col('num_hit') == 0).
-                                        then(pl.lit(0)).
-                                        when(pl.col('num_hit').is_between(1, 3)).
-                                        then(pl.lit(1)).
-                                        otherwise(pl.lit(2)).alias('lift_mask'))
-    all_data = all_data.with_columns(pl.when(pl.col('num_lift') == 0).
-                                        then(pl.lit(0)).
-                                        when(pl.col('num_lift').is_between(1, 3)).
-                                        then(pl.lit(1)).
-                                        otherwise(pl.lit(2)).alias('hit_mask'))
-
-    return all_data
 
 
 class preprocessor():

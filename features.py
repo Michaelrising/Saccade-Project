@@ -1,13 +1,11 @@
 import polars as pl
 import numpy as np
 import talib
-from src.utils import get_data, preprocessor
+from src.utils import preprocessor
+from dataloader import get_data
 from talib import abstract
 import tqdm
 
-# fields = ['BBANDS', 'MIDPOINT', 'SAR', 'T3', 'TRIMA', 'AROONOSC', 'CMO', 'MFI', 'MOM', 'STOCH', 'RSI', 'WILLR', 'ULTOSC',
-#           'ADOSC', 'AD', 'OBV', 'TRANGE', 'NATR', 'HT_DCPERIOD', 'HT_DCPHASE', 'HT_PHASOR', 'HT_SINE', 'HT_TRENDMODE',
-#           'CDL3BLACKCROWS', '']
 
 class PriceVolumeIndicators:
     def __init__(self, data: pl.DataFrame, fields=None, derivatives=None):

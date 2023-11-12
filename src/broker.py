@@ -1,18 +1,19 @@
 from .utils import assert_msg
 import pandas as pd
 import numpy as np
+import numba as nb
+from numba import int32, float32
 import matplotlib.pyplot as plt
 import seaborn as sns
-import polars as pl
 
 class Broker:
-    def __init__(self, market_data:pl.LazyFrame, cash, commission):
+    def __init__(self, market_data:np.array, cash, commission):
         assert_msg(0 < cash, "Enter the initial cash quantity.：{}".format(cash))
         assert_msg(0 <= commission <= 0.05, "Please input the commission fee rate.：{}".format(commission))
         self._initial_cash = cash
         self.market_data = market_data
-        self._stocks = market_data.select('Stock').unique().collect()['Stock'].to_list()
-        self._calenders = market_data.select('Date').unique().collect()['Date'].sort().to_list()
+        self._stocks = set(market_data[:, 0].reshape(-1))
+        self._calenders = sorted(set(market_data[:, 2].reshape(-1)))
         self._commission = commission
         self._position = {}
         self.tick_data = {}
@@ -61,31 +62,35 @@ class Broker:
         """
         :return: Return current market price
         """
-        new_tick_data = self.market_data.filter(pl.col('Time') == self._i).collect()
-        for stock, tick in new_tick_data.groupby('Stock'):
-            self.tick_data[stock] = tick
+        new_tick_data = self.market_data[self.market_data[:, 1] == self._i]
+        for stock in self._stocks:
+            tick = new_tick_data[new_tick_data[:, 0] == stock]
+            # 'Stock', 'Time', 'Date', 'Minutes',  'trade_mask', 'lift_mask',
+            # 'hit_mask', 'close', 'last_bid', 'last_ask', 'last_mid'
+            if len(tick):
+                self.tick_data[stock] = tick[0]
         return self.tick_data
 
     def assert_tradable(self, order):
         stock, amount, price, order_type, order_side = order
         current_market_state = self.tick_data.get(stock)
         if current_market_state is not None:
-            if current_market_state['trade_mask'].item() == 0:
+            if current_market_state[4] == 0:
                 return None
             elif order_side == '1':
-                if current_market_state['hit_mask'].item() == 0:
-                    trade_price = current_market_state['last_ask'].item()
-                elif current_market_state['hit_mask'].item() == 1:
-                    trade_price = current_market_state['last_mid'].item()
+                if current_market_state[6] == 0:
+                    trade_price = current_market_state[-2]
+                elif current_market_state[6] == 1:
+                    trade_price = current_market_state[-1]
                 else:
-                    trade_price = current_market_state['close'].item()
+                    trade_price = current_market_state[-4]
             elif order_side == '2':
-                if current_market_state['lift_mask'].item() == 0:
-                    trade_price = current_market_state['last_bid'].item()
-                elif current_market_state['lift_mask'].item() == 1:
-                    trade_price = current_market_state['last_mid'].item()
+                if current_market_state[5] == 0:
+                    trade_price = current_market_state[-3]
+                elif current_market_state[5] == 1:
+                    trade_price = current_market_state[-1]
                 else:
-                    trade_price = current_market_state['close'].item()
+                    trade_price = current_market_state[-4]
             else:
                 pass
             new_order = (stock, amount, trade_price, order_type, order_side)
@@ -93,16 +98,19 @@ class Broker:
         else:
             return None
 
-    def execute(self, order):
+    @nb.jit(parallel=True)
+    def execute(self, stock, amount, price, order_type, order_side):
         """
         Buy all at market price using the remaining funds in the current account.
         """
-        stock, amount, price, order_type, order_side = order
+        order_type = str(order_type)
+        order_side = str(order_side)
+
         commission = 1 + self._commission if order_side == '1' else 1 - self._commission
         if self.tick_data.get(stock) is not None:
-            price = self.tick_data[stock]['last_ask'].item() if order_side == '1' else self.tick_data[stock]['last_bid'].item()
+            price = self.tick_data[stock][-2] if order_side == '1' else self.tick_data[stock][-3]
         # else:
-
+        order = (stock, amount, price, order_type, order_side)
         quantity = int(amount / price / commission)
         order = self.assert_tradable(order)
         if order is None:
@@ -113,8 +121,6 @@ class Broker:
         else:
             stock, amount, price, order_type, order_side = order
             quantity = int(amount / price /commission)
-
-        assert_msg(stock in self._stocks, "Please enter the stock code.：{}".format(stock))
 
         if quantity == 0:
             return False
@@ -146,11 +152,11 @@ class Broker:
         # and assume it can always be traded
         for stock, (quantity, average_price) in list(self._position.items()):
             if quantity < 0:
-                price = self.tick_data[stock]['last_ask'].item()
+                price = self.tick_data[stock][-2]
                 order_side = '1'
                 commission = 1+self._commission
             else:
-                price = self.tick_data[stock]['last_bid'].item()
+                price = self.tick_data[stock][-3]
                 order_side = '2'
                 commission = 1 - self._commission
 
@@ -176,10 +182,10 @@ class Broker:
         total_pnl = 0
         for stock, (quantity, average_price) in self._position.items():
             # Assume we have a function to get the current market price
-            current_market_price = self.tick_data[stock]['close']
+            current_market_price = self.tick_data[stock][-4]
             total_pnl += (current_market_price - average_price) * quantity
 
-        return total_pnl.item()
+        return total_pnl
 
     def get_absolute_return(self):
         _cash = self.market_value

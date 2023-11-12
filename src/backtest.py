@@ -1,6 +1,6 @@
 import copy
 import os
-
+import numpy as np
 import pandas as pd
 import polars as pl
 from .strategy import Strategy
@@ -19,7 +19,7 @@ class Backtest:
 
     def __init__(self,
 
-                 data: pl.LazyFrame,
+                 data: np.array,
                  strategy: Strategy,
                  broker: Broker):
         """
@@ -40,8 +40,8 @@ class Backtest:
         # if not data.index.is_monotonic_increasing:
         #     data = data.sort_index()
         # Initialize exchange and strategy objects using data.
-        self._data = data
-        self._calenders = self._data.select('Date').unique().collect()['Date'].sort().to_list()
+        self._data = data[:, :3] # keep stock, time, date
+        self._calenders = broker._calenders
         self._broker = broker
         self._strategy = strategy
         self._results = None
@@ -55,6 +55,7 @@ class Backtest:
         # Set the start and end positions for back testing
         # Back testing main loop, update market status, and execute strategy
         num_workers = 20
+        # self.run_one_day((self._calenders[3], self._broker, self._strategy))
 
         with get_context('spawn').Pool(num_workers) as pool:
 
@@ -68,14 +69,16 @@ class Backtest:
         # Strategy Initialization
         strategy.init(day)
 
-        data = self._data.filter(pl.col('Date') == day).sort('Time').collect()
+        data = self._data[self._data[:, 2] == day]
 
-        for tick in data['Time'].unique().sort().to_list():
-            # tick_data = self._data.loc[self._data['date'] == tick]
+        ticks = np.unique(data[:, 1].reshape(-1))
+        ticks.sort()
+        for tick in tqdm(ticks):
+
             broker.next(tick)
             strategy.next(tick)
             broker.write_ratio(tick)
-        # TODO close all the positions
+
         broker.close_all_positions()
 
         return broker.get_result()
