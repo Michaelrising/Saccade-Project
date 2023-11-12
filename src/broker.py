@@ -12,13 +12,14 @@ class Broker:
         self._initial_cash = cash
         self.market_data = market_data
         self._stocks = market_data.select('Stock').unique().collect()['Stock'].to_list()
+        self._calenders = market_data.select('Date').unique().collect()['Date'].sort().to_list()
         self._commission = commission
         self._position = {}
         self.tick_data = {}
         self._cash = cash
         self._i = 0
         self._last_i = None
-        self.day_value = []
+        self.tbt_value = []
         self.maxdown_point = []
         self.transaction_history = []
 
@@ -67,7 +68,7 @@ class Broker:
 
     def assert_tradable(self, order):
         stock, amount, price, order_type, order_side = order
-        current_market_state = self.current_price.get(stock)
+        current_market_state = self.tick_data.get(stock)
         if current_market_state is not None:
             if current_market_state['trade_mask'].item() == 0:
                 return None
@@ -98,13 +99,15 @@ class Broker:
         """
         stock, amount, price, order_type, order_side = order
         commission = 1 + self._commission if order_side == '1' else 1 - self._commission
-        if price == 0:
-            price = self.current_price[stock]['last_ask'].item() if order_side == '1' else self.current_price[stock]['last_bid'].item()
+        if self.tick_data.get(stock) is not None:
+            price = self.tick_data[stock]['last_ask'].item() if order_side == '1' else self.tick_data[stock]['last_bid'].item()
+        # else:
+
         quantity = int(amount / price / commission)
         order = self.assert_tradable(order)
         if order is None:
             self.transaction_history.append(
-                {'Stock': stock, 'Quantity': quantity, 'Price': price,
+                {'Time': self._i, 'Stock': stock, 'Quantity': quantity, 'Price': price,
                  'OrderType': order_type, 'OrderSide': order_side, 'Status': 0})
             return False
         else:
@@ -134,7 +137,7 @@ class Broker:
             self._position[stock] = (quantity, price)
         # Record the transaction
         self.transaction_history.append(
-            {'Stock': stock, 'Quantity': quantity, 'Price': price,
+            {'Time': self._i, 'Stock': stock, 'Quantity': quantity, 'Price': price,
              'OrderType': order_type, 'OrderSide': order_side, 'Status': 1})
         return True
 
@@ -143,27 +146,28 @@ class Broker:
         # and assume it can always be traded
         for stock, (quantity, average_price) in list(self._position.items()):
             if quantity < 0:
-                price = self.current_price[stock]['last_ask'].item()
+                price = self.tick_data[stock]['last_ask'].item()
                 order_side = '1'
                 commission = 1+self._commission
             else:
-                price = self.current_price[stock]['last_bid'].item()
+                price = self.tick_data[stock]['last_bid'].item()
                 order_side = '2'
                 commission = 1 - self._commission
 
             order_type = '1'
             self._cash += quantity * price * commission
-            self.transaction_history.append({'Stock': stock, 'Quantity': quantity, 'Price': price,
+            self.transaction_history.append({'Time': self._i, 'Stock': stock, 'Quantity': quantity, 'Price': price,
                                              'OrderType': order_type, 'OrderSide': order_side, 'Status': 1})
             del self._position[stock]
 
     def next(self, tick):
         self._i = tick
+        self.tick_data = self.current_price
 
     # record daily value
     def write_ratio(self, tick):
         the_value = self.calculate_pnl()
-        self.day_value.append({'Date': tick, 'Value': the_value})
+        self.tbt_value.append({'Time': tick, 'Value': the_value})
 
     def calculate_pnl(self):
         """
@@ -175,7 +179,7 @@ class Broker:
             current_market_price = self.tick_data[stock]['close']
             total_pnl += (current_market_price - average_price) * quantity
 
-        return total_pnl
+        return total_pnl.item()
 
     def get_absolute_return(self):
         _cash = self.market_value
@@ -185,12 +189,12 @@ class Broker:
     def get_annualized_return(self):
         _cash = self.market_value
         ratio = (_cash - self._initial_cash) / self._initial_cash
-        return_value = (1 + ratio) ** (252 / len(self.day_value)) - 1
+        return_value = (1 + ratio) ** (252 / len(self.tbt_value)) - 1
         return return_value
 
     # sharpe ratio
     def get_sharpe_ratio(self):
-        _cash = pd.DataFrame(self.day_value)['Value']
+        _cash = pd.DataFrame(self.tbt_value)['Value']
         ratio = ((_cash - self._initial_cash) / self._initial_cash).dropna()
         return_value = (self.get_annualized_return() - 0.02) / ratio.std() * (252 ** 0.5)
         return return_value
@@ -198,7 +202,7 @@ class Broker:
         # 最大回撤
 
     def get_maxdown(self):
-        _df = pd.DataFrame(self.day_value)
+        _df = pd.DataFrame(self.tbt_value)
         return_list = _df['Value'].dropna()
         i = np.argmax((np.maximum.accumulate(return_list) - return_list) / np.maximum.accumulate(return_list)) + 1
         if i == 0:
@@ -212,10 +216,9 @@ class Broker:
         return (return_list[j] - return_list[i]) / (return_list[j])
 
     def get_result(self):
-        _dic = {'return': round(self.get_absolute_return(), 4),
-                'annual_rate': round(self.get_annualized_return(), 4),
-                'max_drawdown': round(self.get_maxdown(), 4),
-                'sharp_ratio': round(self.get_sharpe_ratio(), 4)}
+        _dic = {'tbt_value': [[i['Time'], i['Value']/self._initial_cash] for i in self.tbt_value],
+                'transaction_history': self.transaction_history,
+                'return': round(self.get_absolute_return(), 4)}
         self.result = _dic
         return _dic
 

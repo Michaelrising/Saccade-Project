@@ -25,7 +25,7 @@ class Strategy(metaclass=abc.ABCMeta):
         return self._tick
 
     @abc.abstractmethod
-    def init(self):
+    def init(self, date):
         """
          Initialize strategy. Called once during the strategy backtesting/execution process
          to initialize the internal state of the strategy. Here, auxiliary parameters of

@@ -1,8 +1,13 @@
+import copy
+import os
+
 import pandas as pd
 import polars as pl
 from .strategy import Strategy
 from .broker import Broker
 from tqdm import tqdm
+import multiprocessing as mp
+from multiprocessing import get_context
 
 
 class Backtest:
@@ -47,32 +52,59 @@ class Backtest:
         Run the backtest. Returns `pd.Series` with results and statistics.
         Keyword arguments are interpreted as strategy parameters.
         """
-        strategy = self._strategy
-        broker = self._broker
-        # Strategy Initialization
-        strategy.init()
         # Set the start and end positions for back testing
         # Back testing main loop, update market status, and execute strategy
-        if groupby_date:
-            for i, day in tqdm(enumerate(self._calenders)):
-                data = self._data.filter(pl.col('Date') == day).sort('Time').collect()
-                for tick in tqdm(data['Time'].unique().sort().to_list()):
-                    # tick_data = self._data.loc[self._data['date'] == tick]
-                    broker.next(tick)
-                    strategy.next(tick)
-                    broker.write_ratio(tick)
-                # TODO close all the positions
-                broker.close_all_positions()
-        else:
-            if not self._data.select('Time').collect()['Time'].is_sorted():
-                self._data = self._data.sort('Time')
-            for tick in tqdm(self._data.select('Time').unique().collect()['Time'].sort().to_list()):
-                broker.next(tick)
-                strategy.next(tick)
-                broker.write_ratio(tick)
+        num_workers = 20
 
-        # After completing the strategy execution, calculate the results and return them.
-        res = broker.get_result()
-        broker.plot_ratio()
-        return res
+        with get_context('spawn').Pool(num_workers) as pool:
+
+            results = list(tqdm(pool.imap(self.run_one_day, [(d, self._broker, self._strategy) for d in self._calenders[3:]])))
+
+        self.agg_res(results)
+        # return results
+
+    def run_one_day(self, args):
+        day, broker, strategy = args
+        # Strategy Initialization
+        strategy.init(day)
+
+        data = self._data.filter(pl.col('Date') == day).sort('Time').collect()
+
+        for tick in data['Time'].unique().sort().to_list():
+            # tick_data = self._data.loc[self._data['date'] == tick]
+            broker.next(tick)
+            strategy.next(tick)
+            broker.write_ratio(tick)
+        # TODO close all the positions
+        broker.close_all_positions()
+
+        return broker.get_result()
+
+    def agg_res(self, results, save=True):
+        tbt_values = []
+        transaction_history = []
+        returns = []
+        for res in results:
+            tbt_value, transaction_his, _return = res.values()
+            tbt_values.append(tbt_value)
+            transaction_history += transaction_his
+            returns.append(_return)
+        tbt_values = pl.from_records(tbt_values, orient='row', schema={'Time': str, 'tbt_value': float})
+
+        transaction_history = pl.from_records(transaction_history, orient='row',
+                                              schema={'Time': str, 'Stock': str, 'Price': float, 'Quantity': int,
+                                                      'OrderType': str, 'OrderSide': str, 'Status': int})
+        returns = pl.from_dict({'Date': self._calenders[3:], 'DailyReturn': returns})
+        returns = returns.with_columns(pl.col('DailyReturn').cumprod().alias('CumReturn'))
+        if save:
+            os.makedirs('./results', exist_ok=True)
+            transaction_history.write_ipc('./results/transaction_history.arrow')
+            tbt_values.write_ipc('./results/tbt_values.arrow')
+            returns.write_ipc('./results/returns.arrow')
+        return tbt_values, transaction_history, returns
+
+
+
+
+
 

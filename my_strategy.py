@@ -24,11 +24,10 @@ class MyStrategy(Strategy):
         self.take_profit_percent = 0.2
         self.stop_loss_percent = 0.05
         self.risk_manage = risk_manage
+        self.date = '0'
         self.warm_up = False
         self.train_x = None
         self.train_y = None
-        self.warm_up_date = '0405'
-        self.training_days = CustomSet(max_len=5)
         self.features = pl.read_csv('./selected_features.csv')['Features'].to_list()
         self.market_cols = ['Date', 'Minutes', 'Time', 'Stock', 'trade_mask', 'lift_mask', 'hit_mask']
         self.market_price_cols = ['close', 'last_bid', 'last_ask', 'last_mid']
@@ -36,39 +35,18 @@ class MyStrategy(Strategy):
         if model == 'ridge':
             self.model = Ridge(alpha=0.5)
         elif model == 'random_forest':
-            self.model = RandomForestRegressor(n_estimators=20, max_depth=3, n_jobs=-1)
+            self.model = RandomForestRegressor(n_estimators=20, max_depth=3, n_jobs=10)
         else:
             self.model = LinearRegression(n_jobs=-1)
 
-    def init(self, data_path="./data/Stocks/*.arrow"):
+    def init(self, date: str, data_path="./data/Stocks/*.arrow"):
         self.data = pl.scan_ipc(data_path).select(self.features+self.market_cols + self.market_price_cols + [self.label])
+        self.date = date
+        idx = self._broker._calenders.index(date)
+        self.days_focus = self._broker._calenders[min(0, idx-3):idx+1]
+        self.data = self.data.filter(pl.col('Date').is_in(self.days_focus))
 
         self.market = self.data.select(self.market_cols + self.market_price_cols)
-
-        self.signals = self.construct_signals()
-
-    def get_signals(self, df):
-        train_df = df.filter(pl.col('UpdateTime') < pl.col('UpdateTime').max())
-
-        _x = train_df.select(self.features).to_numpy()
-        mean_x = _x.mean(axis=0)
-        std_x = _x.std(axis=0) + 10e-6
-        _x = (_x - mean_x) / std_x
-        _y = train_df.select(self.label).to_numpy().reshape(-1)
-        self.model.fit(_x, _y)
-        pred = df.filter(pl.col('UpdateTime') == pl.col('UpdateTime').max())
-        sig_x = (pred.select(self.features).to_numpy() - mean_x) / std_x
-        signals = self.model.predict(sig_x)
-        res = pred.select('Stock', 'Date', 'Time')
-        res = res.with_columns(pl.Series('Signal', signals))
-        return res
-
-    def construct_signals(self):
-        self.data = self.data.with_columns(pl.col('Time').str.to_datetime('%m%d %H:%M:%S').alias('UpdateTime'))
-        self.data = self.data.sort('UpdateTime').group_by_dynamic('UpdateTime', period='5d', offset='5d', every='1m',
-                                                 start_by='datapoint', closed='both', label='right').apply(
-            lambda x: self.get_signals(x),schema={'Signal': pl.Float32, 'Stock': pl.Utf8, 'Date':pl.Utf8, 'Time':pl.Utf8}).collect()
-        return self.data
 
 
     def _warm_up(self, length=20):
@@ -77,9 +55,11 @@ class MyStrategy(Strategy):
         :param length:
         :return:
         """
-        warmup_data = self.data.filter(pl.col('Date') < self.warm_up_date)
+        warmup_data = self.data.filter(pl.col('Date') < self.date)
         warmup_x = warmup_data.select(self.features).collect().to_numpy()
         warmup_y = warmup_data.select(self.label).collect().to_numpy().reshape(-1)
+        self.mean_x = warmup_x.mean(axis=0)
+        self.std_x = warmup_x.std(axis=0) + 10e-6
         self.model.fit(warmup_x, warmup_y)
 
         self.train_x = warmup_x
@@ -87,27 +67,31 @@ class MyStrategy(Strategy):
         self.warm_up = True
 
     def next(self, tick):
-        self.training_days.add(tick[:4])
-        if tick[:4] < self.warm_up_date:
+
+        if tick[:4] < self.date:
             return
         elif not self.warm_up:
             self._warm_up()
         else:
-            train_data = self.data.filter(pl.col('Date').is_in(self.training_days.to_list()) & (pl.col('Time') <= tick))
-            self.train_x = train_data.select(self.features).collect().to_numpy()
-            self.train_y = train_data.select(self.label).collect().to_numpy().reshape(-1)
-            self.model.fit(self.train_x, self.train_y)
+            train_data = self.data.filter((pl.col('Time') < tick))
+            train_x = train_data.select(self.features).collect().to_numpy()
+            self.mean_x = train_x.mean(axis=0)
+            self.std_x = train_x.std(axis=0) + 10e-6
+            train_x = (train_x - self.mean_x) / self.std_x
+
+            train_y = train_data.select(self.label).collect().to_numpy().reshape(-1)
+
+            self.model.fit(train_x, train_y)
 
         tick_data = self.market.filter((pl.col('Time') == tick)).collect()
         if not len(tick_data):
             return
         # if self.risk_manage and self.risk_manager():
         #     return
-        self.tick_x = (self.data.filter((pl.col('Time') == tick)).select(self.features).collect().to_numpy())
+        tick_x = (self.data.filter((pl.col('Time') == tick)).select(self.features).collect().to_numpy())
+        tick_x = (tick_x - self.mean_x) / self.std_x
 
-        self.tick_y = (self.data.filter((pl.col('Time') == tick)).select(self.label).collect()[self.label].to_numpy())
-
-        signal = self.model.predict(self.tick_x)
+        signal = self.model.predict(tick_x)
 
         # split into 5 groups based on signal
         signal = pl.Series('signal', signal)
@@ -118,10 +102,9 @@ class MyStrategy(Strategy):
         # sell the bottom 20% stocks
         sell_list = signal == '1'
         sell_stocks = set(tick_data.filter(sell_list)['Stock'].to_list())
-        # sell first and then buy
 
+        # sell first and then buy
         price = 0.0
-        #TODO conditionning on the market info, the price could be bid or ask or mid
         ava_cash = self._broker.cash
         amount = int(ava_cash / len(buy_stocks))
         order_type = '1' # set always market order for instant trading
@@ -132,7 +115,6 @@ class MyStrategy(Strategy):
         for stock in buy_stocks:
             order = (stock, amount, price, order_type, '1')
             self.execute(order)
-
 
     def risk_manager(self):
         # Calculate the current portfolio value based on today's prices
