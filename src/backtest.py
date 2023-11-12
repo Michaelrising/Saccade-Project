@@ -20,8 +20,8 @@ class Backtest:
 
     def __init__(self,
                  data: np.array,
-                 strategy: Strategy,
-                 broker: Broker):
+                 strategy,
+                 broker):
         """
         Construct backtesting object. Required parameters include: historical data,
         strategy object, initial capital, commission rate, etc.
@@ -37,11 +37,10 @@ class Backtest:
         """
 
         # Sort the market data by time if it is not already sorted.
-        # if not data.index.is_monotonic_increasing:
-        #     data = data.sort_index()
+
         # Initialize exchange and strategy objects using data.
-        self._data = data[:, :3] # keep stock, time, date
-        self._calenders = broker._calenders
+        self._data = data
+        self._calenders = list(sorted(set(data[:, 2].reshape(-1))))
         self._broker = broker
         self._strategy = strategy
         self._results = None
@@ -55,24 +54,27 @@ class Backtest:
         # Set the start and end positions for back testing
         # Back testing main loop, update market status, and execute strategy
         num_workers = 15
-        # self.run_one_day((self._calenders[3], self._broker, self._strategy))
+        # self.run_one_day(self._calenders[3])
         # exit()
 
         with get_context('spawn').Pool(num_workers) as pool:
         #
-            results = list(tqdm(pool.imap(self.run_one_day, [(d, self._broker, self._strategy) for d in self._calenders[-20:]])))
-        #
-        # results = []
-        # for day in tqdm(self._calenders[-20:]):
-        #     results.append(self.run_one_day((day, self._broker, self._strategy)))
+            results = list(tqdm(pool.imap(self.run_one_day, self._calenders[-20:])))
 
         self.agg_res(results)
         # return results
 
-    def run_one_day(self, args):
-        day, broker, strategy = args
+    def run_one_day(self, day):
         # print(day)
         # Strategy Initialization
+        idx = self._calenders.index(day)
+
+        focus_days = self._calenders[max(0, idx - 3):idx + 1]
+        market_data = self._data[(self._data[:, 2]<=day) & (self._data[:, 2]>=focus_days[0])]
+
+        broker = self._broker(market_data, cash=10000000, commission=0.0002)
+        strategy = self._strategy(broker, risk_manage=False, model='linear')
+
         strategy.init(day)
 
         data = self._data[self._data[:, 2] == day]

@@ -3,11 +3,12 @@ import pandas as pd
 import numpy as np
 import numba as nb
 from numba import int32, float32
+import polars as pl
 import matplotlib.pyplot as plt
 import seaborn as sns
 
 class Broker:
-    def __init__(self, market_data:np.array, cash, commission):
+    def __init__(self, market_data:np.array, cash, commission=0.0002):
         assert_msg(0 < cash, "Enter the initial cash quantity.：{}".format(cash))
         assert_msg(0 <= commission <= 0.05, "Please input the commission fee rate.：{}".format(commission))
         self._initial_cash = cash
