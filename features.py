@@ -106,16 +106,16 @@ class PriceVolumeIndicators:
         return self.factors
 
 
+if __name__ == '__main__':
+    try:
+        data = pl.read_ipc('data/raw_data.arrow')
+    except FileNotFoundError:
+        data = get_data()
+        data.write_ipc('data/raw_data.arrow')
+    indicators = PriceVolumeIndicators(data)
+    factors = indicators.get_technical_factors()
+    factors.write_ipc('data/factors.arrow')
 
-try:
-    data = pl.read_ipc('data/raw_data.arrow')
-except FileNotFoundError:
-    data = get_data()
-    data.write_ipc('data/raw_data.arrow')
-indicators = PriceVolumeIndicators(data)
-factors = indicators.get_technical_factors()
-factors.write_ipc('data/factors.arrow')
+    derivatives = indicators.get_derivatives()
 
-derivatives = indicators.get_derivatives()
-
-derivatives.write_ipc('data/derivatives.arrow')
+    derivatives.write_ipc('data/derivatives.arrow')

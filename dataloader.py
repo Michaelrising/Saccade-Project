@@ -148,6 +148,7 @@ class DataLoader():
         # return self.market_datamap
 
 
-loader = DataLoader()
-loader.load_dataset_to_map()
-loader.save_dataset()
+if __name__ == '__main__':
+    loader = DataLoader()
+    loader.load_dataset_to_map()
+    loader.save_dataset()

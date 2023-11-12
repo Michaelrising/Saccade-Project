@@ -1,14 +1,8 @@
-import copy
 import os
 import numpy as np
-import pandas as pd
 import polars as pl
-from .strategy import Strategy
-from .broker import Broker
 from tqdm import tqdm
-import multiprocessing as mp
 from multiprocessing import get_context
-import pytomlpp as toml
 
 
 class Backtest:
@@ -20,8 +14,8 @@ class Backtest:
 
     def __init__(self,
                  data: np.array,
-                 strategy: Strategy,
-                 broker: Broker):
+                 strategy,
+                 broker):
         """
         Construct backtesting object. Required parameters include: historical data,
         strategy object, initial capital, commission rate, etc.
@@ -37,16 +31,15 @@ class Backtest:
         """
 
         # Sort the market data by time if it is not already sorted.
-        # if not data.index.is_monotonic_increasing:
-        #     data = data.sort_index()
+
         # Initialize exchange and strategy objects using data.
-        self._data = data[:, :3] # keep stock, time, date
-        self._calenders = broker._calenders
+        self._data = data
+        self._calenders = list(sorted(set(data[:, 2].reshape(-1))))
         self._broker = broker
         self._strategy = strategy
         self._results = None
 
-    def run(self, groupby_date=True):
+    def run(self, day:str=None):
         """
         Run backtesting, iterate through historical data, execute simulated trades, and return backtesting results.
         Run the backtest. Returns `pd.Series` with results and statistics.
@@ -54,25 +47,30 @@ class Backtest:
         """
         # Set the start and end positions for back testing
         # Back testing main loop, update market status, and execute strategy
-        num_workers = 15
-        # self.run_one_day((self._calenders[3], self._broker, self._strategy))
-        # exit()
 
-        with get_context('spawn').Pool(num_workers) as pool:
-        #
-            results = list(tqdm(pool.imap(self.run_one_day, [(d, self._broker, self._strategy) for d in self._calenders[-20:]])))
-        #
-        # results = []
-        # for day in tqdm(self._calenders[-20:]):
-        #     results.append(self.run_one_day((day, self._broker, self._strategy)))
+        if day:
+            self.run_one_day(day)
+            return
+        else:
+            num_workers = 15
+            with get_context('spawn').Pool(num_workers) as pool:
 
-        self.agg_res(results)
+                results = list(tqdm(pool.imap(self.run_one_day, self._calenders[3:])))
+
+            self.agg_res(results)
         # return results
 
-    def run_one_day(self, args):
-        day, broker, strategy = args
-        # print(day)
+    def run_one_day(self, day):
+
         # Strategy Initialization
+        idx = self._calenders.index(day)
+
+        focus_days = self._calenders[max(0, idx - 3):idx + 1]
+        market_data = self._data[(self._data[:, 2]<=day) & (self._data[:, 2]>=focus_days[0])]
+
+        broker = self._broker(market_data, cash=10000000, commission=0.0002)
+        strategy = self._strategy(broker, risk_manage=False, model='linear')
+
         strategy.init(day)
 
         data = self._data[self._data[:, 2] == day]
@@ -92,10 +90,10 @@ class Backtest:
 
         tbt_values = pl.from_records(tbt_values, orient='row', schema={'Time': str, 'tbt_value': float})
         transaction_history = pl.from_records(transaction_his, orient='row',
-                                              schema={'Time': pl.Utf8, 'Stock': pl.Utf8, 'Price': pl.Float32, 'Quantity': pl.Int32, # signed int
+                                              schema={'Time': pl.Utf8, 'Stock': pl.Utf8, 'Price': pl.Float32, 'Quantity': pl.Int64, # signed int
                                                       'OrderType': pl.Utf8, 'OrderSide': pl.Utf8, 'Status': pl.Int32})
         returns = pl.from_dict({'Date': day, 'DailyReturn': returns})
-        returns = returns.with_columns((pl.col('DailyReturn') + pl.lit(1)).cumprod().alias('CumReturn'))
+        returns = returns.with_columns(pl.col('DailyReturn').cumprod().alias('CumReturn'))
         os.makedirs(f'./results/{day}', exist_ok=True)
         transaction_history.write_ipc(f'./results/{day}/transaction_history.arrow')
         tbt_values.write_ipc(f'./results/{day}/tbt_values.arrow')
@@ -106,7 +104,7 @@ class Backtest:
                 for stock, (quantity, average_price) in value.items():
                     records.append({'Time': key, 'Stock': stock, 'Quantity': quantity, 'AveragePrice': average_price})
         positions = pl.from_records(records, orient='row', schema={'Time': str, 'Stock': pl.Utf8,
-                                                                   'Quantity': pl.Int32, 'AveragePrice': pl.Float32})
+                                                                   'Quantity': pl.Int64, 'AveragePrice': pl.Float32})
 
         positions.write_ipc(f'./results/{day}/positions.arrow')
 
@@ -135,7 +133,7 @@ class Backtest:
                                               schema={'Time': pl.Utf8, 'Stock': pl.Utf8, 'Price': pl.Float32,
                                                       'Quantity': pl.Int32,
                                                       'OrderType': pl.Utf8, 'OrderSide': pl.Utf8, 'Status': pl.Int32})
-        returns = pl.from_dict({'Date': self._calenders[-20:], 'DailyReturn': returns})
+        returns = pl.from_dict({'Date': self._calenders[3:], 'DailyReturn': returns})
         returns = returns.with_columns((pl.col('DailyReturn') + pl.lit(1)).cumprod().alias('CumReturn'))
         positions = pl.from_records(positions, orient='row', schema={'Time': str, 'Stock': pl.Utf8,
                                                                    'Quantity': pl.Int32, 'AveragePrice': pl.Float32})
