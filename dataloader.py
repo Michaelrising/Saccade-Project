@@ -60,6 +60,8 @@ class DataLoader():
             processor.fillnull(feature_lists=feature_lists)
             data = processor.winsorize(feature_lists=feature_lists)
 
+            data = data.with_columns((pl.col('Date') + pl.lit(' ') + pl.col('Minutes')).alias('Time'))
+
             self.market_datamap[stock] = data
 
         return self.market_datamap

@@ -12,7 +12,7 @@ import os
 os.getcwd()
 
 
-def test_labels(m='RF'):
+def test_labels(features, m='RF'):
         data = pl.scan_ipc("./data/Stocks/*.arrow").collect()
         if m == 'RF':
                 model = RandomForestRegressor(max_depth=4, random_state=42, n_jobs=20)
@@ -27,7 +27,7 @@ def test_labels(m='RF'):
         res = [['Label', 'mse', 'rmse', 'r2', 'in-corr', 'out-corr']]
         for label in tqdm.tqdm(targets):
 
-                X_train, y_train, X_test, y_test, train_info, test_info = test_train_split(data, label)
+                X_train, y_train, X_test, y_test, train_info, test_info = test_train_split(data, label, features)
 
                 # Model training
                 model.fit(X_train, y_train.reshape(-1))

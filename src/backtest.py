@@ -4,6 +4,7 @@ from .strategy import Strategy
 from .broker import Broker
 from tqdm import tqdm
 
+
 class Backtest:
     """
     Backtest class is used for reading historical market data,
@@ -12,7 +13,8 @@ class Backtest:
     """
 
     def __init__(self,
-                 data: pl.DataFrame,
+
+                 data: pl.LazyFrame,
                  strategy: Strategy,
                  broker: Broker):
         """
@@ -20,7 +22,7 @@ class Backtest:
         strategy object, initial capital, commission rate, etc.
         The initialization process includes checking input types, filling data null values, etc.
         Parameters:
-        :param data:           pl.DataFrame        Historical data in pandas DataFrame format
+        :param data:           pl.LazyFrame        Historical data in pandas DataFrame format
         :param broker:         type(Broker)        Broker type responsible for executing buy and sell operations
                                                    as well as maintaining account status.
         :param strategy:       type(Strategy)      Strategy Type
@@ -33,11 +35,8 @@ class Backtest:
         # if not data.index.is_monotonic_increasing:
         #     data = data.sort_index()
         # Initialize exchange and strategy objects using data.
-        self._data = data[['Date', 'Minutes', 'Time', 'Stock', 'trade_mask', 'lift_mask',
-                           'hit_mask', 'close', 'last_bid', 'last_ask', 'last_mid']]
-        if not self._data['Time'].is_sorted():
-            self._data = self._data.sort('Time')
-
+        self._data = data
+        self._calenders = self._data.select('Date').unique().collect()['Date'].sort().to_list()
         self._broker = broker
         self._strategy = strategy
         self._results = None
@@ -52,11 +51,12 @@ class Backtest:
         broker = self._broker
         # Strategy Initialization
         strategy.init()
-        # Set the start and end positions for backtesting
-        # Backtesting main loop, update market status, and execute strategy
+        # Set the start and end positions for back testing
+        # Back testing main loop, update market status, and execute strategy
         if groupby_date:
-            for day, data in tqdm(self._data.groupby('Date', maintain_order=True)):
-                for tick in data['Time'].unique().to_list():
+            for i, day in tqdm(enumerate(self._calenders)):
+                data = self._data.filter(pl.col('Date') == day).sort('Time').collect()
+                for tick in tqdm(data['Time'].unique().sort().to_list()):
                     # tick_data = self._data.loc[self._data['date'] == tick]
                     broker.next(tick)
                     strategy.next(tick)
@@ -64,8 +64,9 @@ class Backtest:
                 # TODO close all the positions
                 broker.close_all_positions()
         else:
-            for tick in tqdm(self._data['Time'].unique().to_list()):
-                # tick_data = self._data.loc[self._data['date'] == tick]
+            if not self._data.select('Time').collect()['Time'].is_sorted():
+                self._data = self._data.sort('Time')
+            for tick in tqdm(self._data.select('Time').unique().collect()['Time'].sort().to_list()):
                 broker.next(tick)
                 strategy.next(tick)
                 broker.write_ratio(tick)
