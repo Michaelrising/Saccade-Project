@@ -80,7 +80,8 @@ of last mid price for the next 5 minutes. And then we generate the trading signa
 The signal generation is simple, with the prediction available, we split the stocks into 5 groups and 
 long the stocks in the top 20% quantile and short the stocks in the bottom 20% quantile.  And with the
 requirment that 'Zero net exposure is preferred', we long and short with the same amount of
-money.
+money, with the cash as the 60-80% of the total porfolio. And if the long or short positions are larger than
+the 50% initial cash, we adjust the positions and close all the corresponding positions for risk control.
 
 Recall the trading masks that I derived before, I always set a market order to trade the stocks in no matter
 long or short positions. But the trading status and trading prices are determined by the masks. For instance,
