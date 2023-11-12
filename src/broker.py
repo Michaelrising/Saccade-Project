@@ -102,9 +102,7 @@ class Broker:
 
     # @nb.jit(parallel=True)
     def execute(self, stock, amount, price, order_type, order_side):
-        """
-        Buy all at market price using the remaining funds in the current account.
-        """
+
         order_type = str(order_type)
         order_side = str(order_side)
 
@@ -114,6 +112,7 @@ class Broker:
         # else:
         order = (stock, amount, price, order_type, order_side)
         quantity = int(amount / price / commission)
+
         order = self.assert_tradable(order)
         if order is None:
             self.transaction_history.append(
@@ -131,13 +130,12 @@ class Broker:
 
         # Update position
         if stock in self._position:
-            existing_quantity, average_price = self._position[stock]
+            existing_quantity, _ = self._position[stock]
             new_quantity = existing_quantity + quantity
 
             # Adjust average price if not closing the position
             if new_quantity != 0:
-                new_average_price = (existing_quantity * average_price + price) / new_quantity
-                self._position[stock] = (new_quantity, new_average_price)
+                self._position[stock] = (new_quantity, price)
             else:
                 del self._position[stock]
 
@@ -175,25 +173,12 @@ class Broker:
 
     # record daily value
     def write_ratio(self, tick):
-        the_value = self.calculate_pnl()
+        the_value = self.get_absolute_return()
         self.tbt_value.append({'Time': tick, 'Value': the_value})
 
-
-    def calculate_pnl(self):
-        """
-        Calculate the unrealized P&L of the portfolio.
-        """
-        total_pnl = 0
-        for stock, (quantity, average_price) in self._position.items():
-            # Assume we have a function to get the current market price
-            current_market_price = self.tick_data[stock][-4]
-            total_pnl += (current_market_price - average_price) * quantity
-
-        return total_pnl
-
     def get_absolute_return(self):
-        _cash = self.market_value
-        return (_cash - self._initial_cash) / self._initial_cash
+        pnl = self.market_value
+        return (pnl - self._initial_cash) / self._initial_cash
 
     # annual return rate
     def get_annualized_return(self):
@@ -226,7 +211,7 @@ class Broker:
         return (return_list[j] - return_list[i]) / (return_list[j])
 
     def get_result(self):
-        _dic = {'tbt_value': [[i['Time'], i['Value']/self._initial_cash] for i in self.tbt_value],
+        _dic = {'tbt_value': [[i['Time'], i['Value']] for i in self.tbt_value],
                 'position': self.all_time_positions,
                 'transaction_history': self.transaction_history,
                 'return': round(self.get_absolute_return(), 4)}
@@ -236,7 +221,7 @@ class Broker:
     def plot_ratio(self, w=20, h=7):
         sns.set()
 
-        _day_price = pd.DataFrame(self.day_value).dropna()
+        _day_price = pd.DataFrame(self.tbt_value).dropna()
         _day_price['trade_ratio'] = (_day_price['Value'] - self._initial_cash) / self._initial_cash
 
         plt.figure(figsize=(w, h))

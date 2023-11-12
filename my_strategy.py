@@ -96,28 +96,35 @@ class MyStrategy(Strategy):
 
         # split into 5 groups based on signal
         signal = pl.Series('signal', signal)
-        signal = signal.qcut(quantiles=5, labels=[str(i) for i in range(1, 6)])
-        # buy the top 20% stocks
-        buy_list = signal == '5'
+        signal = signal.qcut(quantiles=10, labels=[str(i) for i in range(1, 11)])
+        # buy the top 10% stocks
+        buy_list = signal == '10'
         # buy_stocks = tick_data.filter
         buy_stocks = set(tick_data.filter(buy_list)['Stock'].to_list())
-        # sell the bottom 20% stocks
+        # sell the bottom 10% stocks
         sell_list = signal == '1'
         sell_stocks = set(tick_data.filter(sell_list)['Stock'].to_list())
 
         # sell first and then buy
-        ava_cash = self._broker.cash
+        # set the position as 80% of the portfolio
+        # if self._broker.market_value / self._broker.cash > 0.8:
+        #     # adjust positions
+        #     pass
+        # else:
+        if tick == '1112 14:47:000':
+            pass
+        ava_cash = self._broker.cash * 0.6
         amount = int(ava_cash / len(buy_stocks))
+        self._execute(sell_stocks, -amount, 2)
         self._execute(buy_stocks, amount, 1)
-        self._execute(sell_stocks, amount, 2)
+
 
     # @nb.jit()
     def _execute(self, stocks, amount, order_side):
         order_type = 1  # set always market order for instant trading
         price = 0.0
-        amount = -amount if order_side == 2 else amount
         for stock in stocks:
-            order = (stock, -amount, price, order_type, order_side)
+            order = (stock, amount, price, order_type, order_side)
             self.execute(order)
 
     def risk_manager(self):
